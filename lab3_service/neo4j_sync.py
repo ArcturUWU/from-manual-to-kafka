@@ -1,7 +1,3 @@
-#curl -X POST http://localhost:5000/api/lab1/report -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" -d @query1.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
-#curl -X POST "http://localhost:5000/api/lab1/audience_report" -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" --data @query2.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
-#curl -X POST "http://localhost:5000/api/lab3/group_report" -H "Content-Type: application/json" --data @query3.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
-#MATCH (g:Group {postgres_id: 1})<-[:HAS_GROUP]-(s:Specialty)<-[:HAS_SPECIALTY]-(d:Department)
 import psycopg2
 from neo4j import GraphDatabase
 import datetime
