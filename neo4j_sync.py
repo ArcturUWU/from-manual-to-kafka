@@ -1,5 +1,5 @@
 #curl -X POST http://localhost:1337/api/lab1/report -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" -d @query1.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
-#curl -X POST "http://localhost:1337/api/lab1/audience_report" -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" --data @query2.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
+#curl -X POST "http://localhost:1337/api/lab2/audience_report" -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" --data @query2.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
 #curl -X POST "http://localhost:1337/api/lab3/group_report" -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" --data @query3.json --compressed | python -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))"
 import psycopg2
 from neo4j import GraphDatabase
