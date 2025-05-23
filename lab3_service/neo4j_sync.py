@@ -5,6 +5,7 @@
 import psycopg2
 from neo4j import GraphDatabase
 import datetime
+from redis_module import StudentSearch
 
 # Конфигурация подключения
 PG_CONFIG = {
@@ -211,34 +212,83 @@ ORDER BY course_name, lecture_name;
             result = session.run(cypher_query, start_date=str(start_date), end_date=str(end_date))
             return [dict(record) for record in result]
         
-    def generate_group_report(self, group_id):
+    def generate_audience_report(self, year: int, semester: int):
+        start_date, end_date = self._calculate_semester_dates(year, semester)
+        print(start_date)
+        print(end_date)
+        
+        cypher_query = """
+MATCH (e:ScheduleEvent)
+WHERE e.date >= date($start_date) AND e.date <= date($end_date)
+
+// Сначала считаем общее число студентов на каждую лекцию
+MATCH (g:Group)-[:SCHEDULED_FOR]->(e)
+MATCH (s:Student)-[:MEMBER_OF]->(g)
+WITH e, COUNT(s) AS students_in_group
+WITH e, SUM(students_in_group) AS total_students
+
+// Теперь привязываем лекцию к курсу и материалам
+MATCH (e)-[:OF_LECTURE]->(l:Lecture)
+MATCH (c:Course)-[:INCLUDES_LECTURE]->(l)
+OPTIONAL MATCH (l)-[:USES_MATERIAL]->(m:Material)
+
+RETURN
+  c.name            AS course_name,
+  l.name            AS lecture_name,
+  COLLECT(DISTINCT m.name) AS tech_requirements,
+  total_students
+ORDER BY course_name, lecture_name;
         """
-        Генерирует отчет по заданной группе студентов, включая информацию о прослушанных и запланированных часах лекций.
+
+        with self.neo_driver.session() as session:
+            result = session.run(cypher_query, start_date=str(start_date), end_date=str(end_date))
+            return [dict(record) for record in result]
+        
+    def generate_group_report(self, group_id: int):
+        """
+        Генерирует отчёт по заданной группе студентов:
+        подсчитывает общее (planned_hours) и фактическое (attended_hours) время.
+        Информация о студенте теперь берётся из Redis, а не из Neo4j.
         """
         cypher_query = """
-        MATCH (g:Group {postgres_id: $group_id})<-[:HAS_GROUP]-(s:Specialty)<-[:HAS_SPECIALTY]-(d:Department)
-        MATCH (d)-[:OFFERS_COURSE]->(c:Course)
-        MATCH (c)-[:INCLUDES_LECTURE]->(l:Lecture)
-        MATCH (e:ScheduleEvent)-[:OF_LECTURE]->(l)
-        WHERE (g)-[:SCHEDULED_FOR]->(e)
+        MATCH (g:Group {postgres_id: $group_id})
+        MATCH (c:Course)-[:INCLUDES_LECTURE]->(l:Lecture)
+        MATCH (e:ScheduleEvent)-[:OF_LECTURE]->(l),
+              (g)-[:SCHEDULED_FOR]->(e)
         MATCH (st:Student)-[:MEMBER_OF]->(g)
-        WITH g, c, st, e
-        OPTIONAL MATCH (st)-[a:ATTENDED]->(e)
-        WHERE a.attended = true
-        WITH g, st, c, 
+        OPTIONAL MATCH (st)-[a:ATTENDED]->(e) WHERE a.attended = true
+        WITH g, c, st,
              COUNT(DISTINCT e) AS total_lectures,
              COUNT(DISTINCT CASE WHEN a IS NOT NULL THEN e END) AS attended_lectures
-        RETURN g {.*} AS group_info,
-               st {.*} AS student_info,
-               c {.*} AS course_info,
-               total_lectures * 2 AS planned_hours,
-               attended_lectures * 2 AS attended_hours
+        RETURN
+          g { .postgres_id, .name }       AS group_info,
+          st.postgres_id                  AS student_id,
+          c { .postgres_id, .name }       AS course_info,
+          total_lectures * 2              AS planned_hours,
+          attended_lectures * 2           AS attended_hours
         ORDER BY g.name, st.name, c.name
         """
-        
+
+        # 1) Querry for Neo4j
         with self.neo_driver.session() as session:
             result = session.run(cypher_query, group_id=group_id)
-            return [dict(record) for record in result]
+            raw_records = [dict(rec) for rec in result]
+
+        # 2) Init Redis
+        student_search = StudentSearch(redis_host='redis', redis_port=6379)
+
+        # 3) For every index(id) result - applying Redis search by id
+        report = []
+        for rec in raw_records:
+            sid = rec.pop("student_id")
+            try:
+                full_student = student_search.get_student_full(int(sid))
+            except ValueError:
+                full_student = {"id": sid, "name": None, "age": None, "mail": None, "group": None}
+            rec["student_info"] = full_student
+            report.append(rec)
+
+        return report
 
     @staticmethod
     def _calculate_semester_dates(year: int, semester: int):
