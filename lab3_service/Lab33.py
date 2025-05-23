@@ -6,11 +6,11 @@ PG_CONFIG = {
     'dbname': "postgres_db",
     'user': "postgres_user",
     'password': "postgres_password",
-    'host': 'localhost',
-    'port': 5430,
+    'host': 'postgres',
+    'port': 5432,
 }
 
-NEO4J_URI = 'bolt://localhost:7687'
+NEO4J_URI = 'bolt://neo4j:7687'
 NEO4J_USER = 'neo4j'
 NEO4J_PASSWORD = 'strongpassword'
 
