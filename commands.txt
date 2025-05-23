@@ -42,9 +42,6 @@ curl -X POST http://localhost:8083/connectors -H "Content-Type: application/json
 
 ##### Registers a connector defined by the elastic_sink.json configuration file
 4.3. Check connector status
-bash
-Копировать
-Редактировать
 curl -s http://localhost:8083/connectors/elastic-sink-lectures-only/status | jq .
 ##### Retrieves the current status of the 'elastic-sink-lectures-only' connector
 4.4. Delete connector
