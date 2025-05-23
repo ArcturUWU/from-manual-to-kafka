@@ -19,7 +19,7 @@ PG_CONFIG = {
     'user': os.getenv("POSTGRES_USER", "postgres_user"),
     'password': os.getenv("POSTGRES_PASSWORD", "postgres_password"),
     'host': os.getenv("POSTGRES_HOST", "postgres"),
-    'port': os.getenv("POSTGRES_PORT", 5430),
+    'port': os.getenv("POSTGRES_PORT", 5432),
 }
 
 @app.route('/api/lab3/group_report', methods=['POST'])
