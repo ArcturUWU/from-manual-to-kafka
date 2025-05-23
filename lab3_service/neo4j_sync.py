@@ -248,20 +248,22 @@ ORDER BY course_name, lecture_name;
         """
         cypher_query = """
         MATCH (g:Group {postgres_id: $group_id})
-        MATCH (c:Course)-[:INCLUDES_LECTURE]->(l:Lecture)
+        MATCH (g)<-[:HAS_GROUP]-(s:Specialty)<-[:HAS_SPECIALTY]-(d:Department)
+        MATCH (d)-[:OFFERS_COURSE]->(c:Course)
+        MATCH (c)-[:INCLUDES_LECTURE]->(l:Lecture)
         MATCH (e:ScheduleEvent)-[:OF_LECTURE]->(l),
-              (g)-[:SCHEDULED_FOR]->(e)
+            (g)-[:SCHEDULED_FOR]->(e)
         MATCH (st:Student)-[:MEMBER_OF]->(g)
         OPTIONAL MATCH (st)-[a:ATTENDED]->(e) WHERE a.attended = true
         WITH g, c, st,
-             COUNT(DISTINCT e) AS total_lectures,
-             COUNT(DISTINCT CASE WHEN a IS NOT NULL THEN e END) AS attended_lectures
+            COUNT(DISTINCT e) AS total_lectures,
+            COUNT(DISTINCT CASE WHEN a IS NOT NULL THEN e END) AS attended_lectures
         RETURN
-          g { .postgres_id, .name }       AS group_info,
-          st.postgres_id                  AS student_id,
-          c { .postgres_id, .name }       AS course_info,
-          total_lectures * 2              AS planned_hours,
-          attended_lectures * 2           AS attended_hours
+        g { .postgres_id, .name }       AS group_info,
+        st.postgres_id                  AS student_id,
+        c { .postgres_id, .name }       AS course_info,
+        total_lectures * 2              AS planned_hours,
+        attended_lectures * 2           AS attended_hours
         ORDER BY g.name, st.name, c.name
         """
 
