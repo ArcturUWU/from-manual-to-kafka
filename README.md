@@ -81,6 +81,7 @@ To use labs full functionally
 2. Use `docker build -t lab{num}_app .` to build up lab containers(use whatever lab number instead of num).
 3. Use `docker build -t gateway_app .` to build gateway.
 4. create a db-network by yourself using `docker network create`
+P.S. if you have a trouble with building services - try to rename `DOCKERFILE` to `Dockerfile` or `dockerfile`
 
 # Labs info
 Info about what every lab is doing
