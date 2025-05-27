@@ -65,7 +65,7 @@ The project structure is as follows:
 * `neo4j_sync.py` creates and synchronise neo4j structure 🔥
 * `redis_sync.py` creates and synchronise redis structure 🔥
 * `purge.py` deletes all the data from all the databases 🔥
-* `README.md` contains this documentation 📝
+* `mongo_sink.py` is a hand made kafka cunsumer for mongo(default configs can't create hierarchy) 🔥
 
 # Contributing Guidelines
 Contributions are welcome! 👋 To contribute, follow these steps:
@@ -81,6 +81,8 @@ To use labs full functionally
 2. Use `docker build -t lab{num}_app .` to build up lab containers(use whatever lab number instead of num).
 3. Use `docker build -t gateway_app .` to build gateway.
 4. create a db-network by yourself using `docker network create`
+5. If you want to generate data - you should use (1) `random_attendance_generator.py` and (2) `total_generator.py`
+6. total generator also synchronizing data to 4 other dbs so if you want to synk only needed one - make sure you commented needed rows
 P.S. if you have a trouble with building services - try to rename `DOCKERFILE` to `Dockerfile` or `dockerfile`
 
 # Labs info
