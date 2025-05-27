@@ -5,6 +5,7 @@ import os
 
 app = Flask(__name__)
 
+
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "strongpassword")
@@ -19,7 +20,7 @@ PG_CONFIG = {
     'user': os.getenv("POSTGRES_USER", "postgres_user"),
     'password': os.getenv("POSTGRES_PASSWORD", "postgres_password"),
     'host': os.getenv("POSTGRES_HOST", "postgres"),
-    'port': os.getenv("POSTGRES_PORT", 5430),
+    'port': os.getenv("POSTGRES_PORT", 5432),
 }
 
 
@@ -47,11 +48,7 @@ def generate_attendance_report():
     if not lecture_ids:
         return jsonify({'error': 'No lectures found for the term'}), 404
 
-    finder = AttendanceFinder(
-        uri=NEO4J_URI,
-        user=NEO4J_USER,
-        password=NEO4J_PASSWORD
-    )
+    finder = AttendanceFinder()
     redis_conn = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
     try:
