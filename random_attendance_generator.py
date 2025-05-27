@@ -398,69 +398,104 @@ for date, lect_id, grp_id in schedules:
 
 
 def generate_students_and_attendance(cur, students_per_group=20):
-    # 1. Получаем все группы
+    """
+    Генерирует студентов и записи посещаемости с автоматическим созданием партиций.
+    Перед вставкой в Attendance функция ensure_attendance_partition должна быть объявлена в БД.
+
+    Параметры:
+    - cur: psycopg2 cursor
+    - students_per_group: количество студентов на группу
+    """
+    # 1. Получаем ID групп (ограничиваем первыми 32)
     cur.execute("SELECT id FROM St_group;")
-    group_ids = [row[0] for row in cur.fetchall()]
-    group_ids = group_ids[:32]
+    group_ids = [row[0] for row in cur.fetchall()][:32]
 
     for group_id in group_ids:
-        # 2. Берём все сессии для этой группы
+        # 2. Получаем сессии и вычисляем semester прямо в запросе
         cur.execute("""
-            SELECT id, date, lecture_id
+            SELECT
+                id,
+                date,
+                lecture_id,
+                CASE
+                  WHEN EXTRACT(MONTH FROM date) BETWEEN 1 AND 6
+                    THEN (EXTRACT(YEAR FROM date)::INT || '_spring')
+                  ELSE (EXTRACT(YEAR FROM date)::INT || '_fall')
+                END AS semester
             FROM Schedule
             WHERE group_id = %s
             ORDER BY date
         """, (group_id,))
-        sessions = cur.fetchall()  # [(sched_id, date, lec_id), ...]
+        sessions = cur.fetchall()  # [(id, date, lecture_id, semester), ...]
 
-        # 3. Пропускаем группы без сессий
         if not sessions:
             print(f"Пропускаем группу {group_id}: нет записей в Schedule")
             continue
 
-        # 4. Если мало сессий, добавляем новые
+        # 3. Добавляем новых сессий при необходимости
         if len(sessions) < students_per_group + 1:
             needed = students_per_group + 1 - len(sessions)
             last_date = sessions[-1][1]
             existing_lects = [s[2] for s in sessions]
             for i in range(needed):
-                new_date = last_date + timedelta(days=1 + i)
+                new_date = last_date + timedelta(days=i+1)
                 lec_id = random.choice(existing_lects)
                 cur.execute(
-                    "INSERT INTO Schedule (date, lecture_id, group_id) VALUES (%s, %s, %s) RETURNING id",
+                    """
+                    INSERT INTO Schedule (date, lecture_id, group_id)
+                    VALUES (%s, %s, %s)
+                    RETURNING id,
+                              CASE
+                                WHEN EXTRACT(MONTH FROM date) BETWEEN 1 AND 6
+                                  THEN (EXTRACT(YEAR FROM date)::INT || '_spring')
+                                ELSE (EXTRACT(YEAR FROM date)::INT || '_fall')
+                              END
+                    """,
                     (new_date, lec_id, group_id)
                 )
-                new_id = cur.fetchone()[0]
-                sessions.append((new_id, new_date, lec_id))
+                new_id, new_sem = cur.fetchone()
+                sessions.append((new_id, new_date, lec_id, new_sem))
 
-        # 5. Генерируем студентов с уникальным числом посещений
-        total_sessions = len(sessions)
+        # 4. Создаем партиции для всех семестров в этой группе
+        sid_to_sem = {sid: sem for sid, _, _, sem in sessions}
+        for sem in set(sid_to_sem.values()):
+            cur.execute("SELECT ensure_attendance_partition(%s);", (sem,))
+
+        # 5. Параметры для генерации посещаемости
+        total = len(sessions)
         sched_ids = [s[0] for s in sessions]
-        # создаём список посещённых от 1 до total_sessions-1
-        possible = list(range(1, total_sessions))
-        # тянем ровно students_per_group разных значений
-        attend_counts = random.sample(possible, students_per_group)
+        attend_counts = random.sample(range(1, total), students_per_group)
 
-        # 6. Вставляем студентов и их посещения
+        # 6. Генерация студентов и записей посещаемости
         for count in attend_counts:
-            name = f"stud{random.randint(10000,99999)}"
-            age  = random.randint(17, 24)
+            # Создаем студента
+            name = f"stud{random.randint(10000, 99999)}"
+            age = random.randint(17, 24)
             mail = f"{name}@university.example"
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO Students (name, age, mail, group_id)
                 VALUES (%s, %s, %s, %s)
                 RETURNING id
-            """, (name, age, mail, group_id))
+                """,
+                (name, age, mail, group_id)
+            )
             student_id = cur.fetchone()[0]
 
+            # Вставляем посещаемость
             visited = set(random.sample(sched_ids, k=count))
             for sid in sched_ids:
                 attended = sid in visited
-                cur.execute("""
-                    INSERT INTO Attendance (student_id, schedule_id, attended)
-                    VALUES (%s, %s, %s)
-                """, (student_id, sid, attended))
+                sem = sid_to_sem[sid]
+                cur.execute(
+                    """
+                    INSERT INTO Attendance (student_id, schedule_id, attended, semester)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (student_id, sid, attended, sem)
+                )
 
+    print("Генерация студентов и посещаемости завершена.")
 
 conn.commit()
 cur.close()
