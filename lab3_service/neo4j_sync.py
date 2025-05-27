@@ -1,320 +1,349 @@
-import psycopg2
 from neo4j import GraphDatabase
-import datetime
-from redis_module import StudentSearch
+from datetime import date, timedelta
+import psycopg2
 
-# Конфигурация подключения
+# PostgreSQL connection parameters
 PG_CONFIG = {
     'dbname': "postgres_db",
     'user': "postgres_user",
     'password': "postgres_password",
-    'host': 'postgres',
-    'port': 5432,
+    'host': "postgres",
+    'port': "5432"
 }
 
-NEO4J_URI = 'bolt://neo4j:7687'
-NEO4J_USER = 'neo4j'
-NEO4J_PASSWORD = 'strongpassword'
+# Neo4j connection parameters
+NEO4J_URI = "bolt://neo4j:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "strongpassword"
 
 class SyncService:
-    def __init__(self, pg_conf, neo4j_uri, neo4j_user, neo4j_password):
-        self.pg_conn = psycopg2.connect(**pg_conf)
-        self.neo_driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+    def __init__(self):
+        # Initialize Postgres connection
+        self.pg_conn = psycopg2.connect(**PG_CONFIG)
+        self.pg_cur = self.pg_conn.cursor()
+        # Initialize Neo4j driver
+        self.neo4j_driver = GraphDatabase.driver(
+            NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
+        )
 
     def close(self):
+        self.pg_cur.close()
         self.pg_conn.close()
-        self.neo_driver.close()
-
-    def fetch_all(self, query):
-        with self.pg_conn.cursor() as cur:
-            cur.execute(query)
-            cols = [desc[0] for desc in cur.description]
-            for row in cur.fetchall():
-                yield dict(zip(cols, row))
+        self.neo4j_driver.close()
 
     def sync_universities(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MERGE (u:University {postgres_id: row.id})
-        SET u.name = row.name, u.location = row.location
-        '''
-        rows = list(self.fetch_all("SELECT id, name, location FROM University"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
+        self.pg_cur.execute("SELECT id, name, location FROM University")
+        for id, name, location in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MERGE (u:University {id: $id}) "
+                    "SET u.name = $name, u.location = $location",
+                    id=id, name=name, location=location
+                )
 
     def sync_institutes(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (u:University {postgres_id: row.university_id})
-        MERGE (i:Institute {postgres_id: row.id})
-        SET i.name = row.name
-        MERGE (u)-[:HAS_INSTITUTE]->(i)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, university_id FROM Institute"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
+        self.pg_cur.execute("SELECT id, name, university_id FROM Institute")
+        for id, name, university_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (u:University {id: $uid})"
+                    " MERGE (i:Institute {id: $id}) "
+                    "SET i.name = $name "
+                    "MERGE (u)-[:HAS_INSTITUTE]->(i)",
+                    uid=university_id, id=id, name=name
+                )
 
     def sync_departments(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (i:Institute {postgres_id: row.institute_id})
-        MERGE (d:Department {postgres_id: row.id})
-        SET d.name = row.name
-        MERGE (i)-[:HAS_DEPARTMENT]->(d)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, institute_id FROM Department"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
+        self.pg_cur.execute("SELECT id, name, institute_id FROM Department")
+        for id, name, institute_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (i:Institute {id: $iid})"
+                    " MERGE (d:Department {id: $id}) "
+                    "SET d.name = $name "
+                    "MERGE (i)-[:HAS_DEPARTMENT]->(d)",
+                    iid=institute_id, id=id, name=name
+                )
 
     def sync_specialties(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (d:Department {postgres_id: row.department_id})
-        MERGE (s:Specialty {postgres_id: row.id})
-        SET s.name = row.name
-        MERGE (d)-[:HAS_SPECIALTY]->(s)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, department_id FROM Specialty"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
+        self.pg_cur.execute("SELECT id, name, department_id FROM Specialty")
+        for id, name, department_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (d:Department {id: $did})"
+                    " MERGE (s:Specialty {id: $id}) "
+                    "SET s.name = $name "
+                    "MERGE (d)-[:HAS_SPECIALTY]->(s)",
+                    did=department_id, id=id, name=name
+                )
 
     def sync_groups(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (s:Specialty {postgres_id: row.speciality_id})
-        MERGE (g:Group {postgres_id: row.id})
-        SET g.name = row.name
-        MERGE (s)-[:HAS_GROUP]->(g)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, speciality_id FROM St_group"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
+        self.pg_cur.execute("SELECT id, name, speciality_id FROM St_group")
+        for id, name, speciality_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (s:Specialty {id: $sid})"
+                    " MERGE (g:Group {id: $id}) "
+                    "SET g.name = $name "
+                    "MERGE (s)-[:HAS_GROUP]->(g)",
+                    sid=speciality_id, id=id, name=name
+                )
 
-    def sync_courses_and_lectures(self):
-        # Courses
-        cypher_course = '''
-        UNWIND $rows AS row
-        MATCH (d:Department {postgres_id: row.department_id}),
-              (s:Specialty {postgres_id: row.specialty_id})
-        MERGE (c:Course {postgres_id: row.id})
-        SET c.name = row.name
-        MERGE (d)-[:OFFERS_COURSE]->(c)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, department_id, specialty_id FROM Course_of_lecture"))
-        with self.neo_driver.session() as session:
-            session.run(cypher_course, rows=rows)
+    def sync_courses(self):
+        self.pg_cur.execute(
+            "SELECT id, name, department_id, specialty_id FROM Course_of_lecture"
+        )
+        for id, name, dept_id, spec_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (d:Department {id: $did}), (s:Specialty {id: $sid})"
+                    " MERGE (c:Course {id: $id}) "
+                    "SET c.name = $name "
+                    "MERGE (d)-[:OFFERS]->(c) "
+                    "MERGE (s)-[:INCLUDES_COURSE]->(c)",
+                    did=dept_id, sid=spec_id, id=id, name=name
+                )
 
-        # Lectures
-        cypher_lec = '''
-        UNWIND $rows AS row
-        MATCH (c:Course {postgres_id: row.course_of_lecture_id})
-        MERGE (l:Lecture {postgres_id: row.id})
-        SET l.name = row.name
-        MERGE (c)-[:INCLUDES_LECTURE]->(l)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, course_of_lecture_id FROM Lecture"))
-        with self.neo_driver.session() as session:
-            session.run(cypher_lec, rows=rows)
+    def sync_lectures(self):
+        self.pg_cur.execute("SELECT id, name, course_of_lecture_id FROM Lecture")
+        for id, name, course_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (c:Course {id: $cid})"
+                    " MERGE (l:Lecture {id: $id}) "
+                    "SET l.name = $name "
+                    "MERGE (c)-[:HAS_LECTURE]->(l)",
+                    cid=course_id, id=id, name=name
+                )
+
+    def sync_materials(self):
+        self.pg_cur.execute(
+            "SELECT id, name, course_of_lecture_id FROM Material_of_lecture"
+        )
+        for id, name, lecture_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (l:Lecture {id: $lid})"
+                    " MERGE (m:Material {id: $id}) "
+                    "SET m.name = $name "
+                    "MERGE (l)-[:HAS_MATERIAL]->(m)",
+                    lid=lecture_id, id=id, name=name
+                )
+
+    def sync_schedules(self):
+        self.pg_cur.execute(
+            "SELECT id, date, lecture_id, group_id FROM Schedule"
+        )
+        for id, date, lecture_id, group_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (l:Lecture {id: $lid}), (g:Group {id: $gid})"
+                    " MERGE (sch:Schedule {id: $id}) "
+                    "SET sch.date = $date "
+                    "MERGE (l)-[:SCHEDULED_AT]->(sch) "
+                    "MERGE (sch)-[:FOR_GROUP]->(g)",
+                    lid=lecture_id, gid=group_id,
+                    id=id, date=date
+                )
 
     def sync_students(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (g:Group {postgres_id: row.group_id})
-        MERGE (st:Student {postgres_id: row.id})
-        SET st.name = row.name, st.age = row.age, st.mail = row.mail
-        MERGE (st)-[:MEMBER_OF]->(g)
-        '''
-        rows = list(self.fetch_all("SELECT id, name, age, mail, group_id FROM Students"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
+        self.pg_cur.execute(
+            "SELECT id, name, age, mail, group_id FROM Students"
+        )
+        for id, name, age, mail, group_id in self.pg_cur.fetchall():
+            with self.neo4j_driver.session() as session:
+                session.run(
+                    "MATCH (g:Group {id: $gid})"
+                    " MERGE (s:Student {id: $id}) "
+                    "SET s.name = $name, s.age = $age, s.mail = $mail "
+                    "MERGE (g)-[:HAS_STUDENT]->(s)",
+                    gid=group_id, id=id, name=name, age=age, mail=mail
+                )
 
-    def sync_schedule(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (l:Lecture {postgres_id: row.lecture_id}),
-              (g:Group {postgres_id: row.group_id})
-        MERGE (e:ScheduleEvent {postgres_id: row.id})
-        SET e.date = date(row.date)
-        MERGE (g)-[:SCHEDULED_FOR]->(e)
-        MERGE (e)-[:OF_LECTURE]->(l)
-        '''
-        rows = list(self.fetch_all("SELECT id, date, lecture_id, group_id FROM Schedule"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
-
-    def sync_attendance(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (st:Student {postgres_id: row.student_id}),
-              (e:ScheduleEvent {postgres_id: row.schedule_id})
-        MERGE (st)-[a:ATTENDED]->(e)
-        SET a.attended = row.attended, a.updated = row.id
-        '''
-        rows = list(self.fetch_all("SELECT id, student_id, schedule_id, attended FROM Attendance"))
-        with self.neo_driver.session() as session:
-            session.run(cypher, rows=rows)
-    
-    
-    def sync_materials(self):
-        cypher = '''
-        UNWIND $rows AS row
-        MATCH (lec:Lecture {postgres_id: row.lecture_id})
-        MERGE (mat:Material {postgres_id: row.id})
-        SET mat.name = row.name
-        MERGE (lec)-[:USES_MATERIAL]->(mat)
-        '''
-        # Добавьте JOIN с таблицей Lecture, чтобы исключить недействительные ID
-        sql = """
-        SELECT m.id, m.name, m.course_of_lecture_id AS lecture_id
-        FROM Material_of_lecture m
-        INNER JOIN Lecture l ON m.course_of_lecture_id = l.id
-        """
-        rows = list(self.fetch_all(sql))
-        
-        if rows:
-            with self.neo_driver.session() as session:
-                session.run(cypher, rows=rows)
-
-
-    def generate_audience_report(self, year: int, semester: int):
-        start_date, end_date = self._calculate_semester_dates(year, semester)
-        print(start_date)
-        print(end_date)
-        
-        cypher_query = """
-MATCH (e:ScheduleEvent)
-WHERE e.date >= date($start_date) AND e.date <= date($end_date)
-
-// Сначала считаем общее число студентов на каждую лекцию
-MATCH (g:Group)-[:SCHEDULED_FOR]->(e)
-MATCH (s:Student)-[:MEMBER_OF]->(g)
-WITH e, COUNT(s) AS students_in_group
-WITH e, SUM(students_in_group) AS total_students
-
-// Теперь привязываем лекцию к курсу и материалам
-MATCH (e)-[:OF_LECTURE]->(l:Lecture)
-MATCH (c:Course)-[:INCLUDES_LECTURE]->(l)
-OPTIONAL MATCH (l)-[:USES_MATERIAL]->(m:Material)
-
-RETURN
-  c.name            AS course_name,
-  l.name            AS lecture_name,
-  COLLECT(DISTINCT m.name) AS tech_requirements,
-  total_students
-ORDER BY course_name, lecture_name;
-        """
-
-        with self.neo_driver.session() as session:
-            result = session.run(cypher_query, start_date=str(start_date), end_date=str(end_date))
-            return [dict(record) for record in result]
-        
-    def generate_audience_report(self, year: int, semester: int):
-        start_date, end_date = self._calculate_semester_dates(year, semester)
-        print(start_date)
-        print(end_date)
-        
-        cypher_query = """
-MATCH (e:ScheduleEvent)
-WHERE e.date >= date($start_date) AND e.date <= date($end_date)
-
-// Сначала считаем общее число студентов на каждую лекцию
-MATCH (g:Group)-[:SCHEDULED_FOR]->(e)
-MATCH (s:Student)-[:MEMBER_OF]->(g)
-WITH e, COUNT(s) AS students_in_group
-WITH e, SUM(students_in_group) AS total_students
-
-// Теперь привязываем лекцию к курсу и материалам
-MATCH (e)-[:OF_LECTURE]->(l:Lecture)
-MATCH (c:Course)-[:INCLUDES_LECTURE]->(l)
-OPTIONAL MATCH (l)-[:USES_MATERIAL]->(m:Material)
-
-RETURN
-  c.name            AS course_name,
-  l.name            AS lecture_name,
-  COLLECT(DISTINCT m.name) AS tech_requirements,
-  total_students
-ORDER BY course_name, lecture_name;
-        """
-
-        with self.neo_driver.session() as session:
-            result = session.run(cypher_query, start_date=str(start_date), end_date=str(end_date))
-            return [dict(record) for record in result]
-        
-    def generate_group_report(self, group_id: int):
-        """
-        Генерирует отчёт по заданной группе студентов:
-        подсчитывает общее (planned_hours) и фактическое (attended_hours) время.
-        Информация о студенте теперь берётся из Redis, а не из Neo4j.
-        """
-        cypher_query = """
-        MATCH (g:Group {postgres_id: $group_id})
-        MATCH (g)<-[:HAS_GROUP]-(s:Specialty)<-[:HAS_SPECIALTY]-(d:Department)
-        MATCH (d)-[:OFFERS_COURSE]->(c:Course)
-        MATCH (c)-[:INCLUDES_LECTURE]->(l:Lecture)
-        MATCH (e:ScheduleEvent)-[:OF_LECTURE]->(l),
-            (g)-[:SCHEDULED_FOR]->(e)
-        MATCH (st:Student)-[:MEMBER_OF]->(g)
-        OPTIONAL MATCH (st)-[a:ATTENDED]->(e) WHERE a.attended = true
-        WITH g, c, st,
-            COUNT(DISTINCT e) AS total_lectures,
-            COUNT(DISTINCT CASE WHEN a IS NOT NULL THEN e END) AS attended_lectures
-        RETURN
-        g { .postgres_id, .name }       AS group_info,
-        st.postgres_id                  AS student_id,
-        c { .postgres_id, .name }       AS course_info,
-        total_lectures * 2              AS planned_hours,
-        attended_lectures * 2           AS attended_hours
-        ORDER BY g.name, st.name, c.name
-        """
-
-        # 1) Querry for Neo4j
-        with self.neo_driver.session() as session:
-            result = session.run(cypher_query, group_id=group_id)
-            raw_records = [dict(rec) for rec in result]
-
-        # 2) Init Redis
-        student_search = StudentSearch(redis_host='redis', redis_port=6379)
-
-        # 3) For every index(id) result - applying Redis search by id
-        report = []
-        for rec in raw_records:
-            sid = rec.pop("student_id")
-            try:
-                full_student = student_search.get_student_full(int(sid))
-            except ValueError:
-                full_student = {"id": sid, "name": None, "age": None, "mail": None, "group": None}
-            rec["student_info"] = full_student
-            report.append(rec)
-
-        return report
-
-    @staticmethod
-    def _calculate_semester_dates(year: int, semester: int):
-        """Вычисляет даты начала и конца семестра"""
-        if semester == 1:
-            return datetime.datetime(year, 9, 1).date(), datetime.datetime(year, 12, 31).date()
-        else:
-            return datetime.datetime(year, 2, 1).date(), datetime.datetime(year, 6, 30).date()
-
-
-
-    def run_all(self):
+    def sync_all(self):
+        # Выполняем все шаги синхронизации
         self.sync_universities()
         self.sync_institutes()
         self.sync_departments()
         self.sync_specialties()
         self.sync_groups()
-        self.sync_courses_and_lectures()
-        self.sync_students()
-        self.sync_schedule()
-        self.sync_attendance()
+        self.sync_courses()
+        self.sync_lectures()
         self.sync_materials()
-        print("Синхронизация завершена.")
+        self.sync_schedules()
+        self.sync_students()
+        # Учёт посещаемости теперь проверяется напрямую в PostgreSQL
 
+    # --------------------- Report Functions ---------------------
+    def _calculate_semester_dates(self, year: int, semester: int):
+        """
+        Возвращает кортеж (start_date, end_date) для заданного семестра:
+        Семестр 1: с 1 февраля по 30 июня; Семестр 2: с 1 сентября по 31 января следующего года.
+        """
+        if semester == 1:
+            start = date(year, 2, 1)
+            end = date(year, 6, 30)
+        else:
+            start = date(year, 9, 1)
+            end = date(year + 1, 1, 31)
+        return start, end
+    def get_scheduled_students(self, schedule_id):
+        """
+        Извлечь список студентов, которым назначена лекция по расписанию.
+        Данные берутся из Neo4j.
+        Возвращает список словарей: [{'id': ..., 'name': ...}, ...]
+        """
+        query = (
+            "MATCH (sch:Schedule {id: $sid})-[:FOR_GROUP]->(g:Group)"
+            "-[:HAS_STUDENT]->(s:Student)"
+            " RETURN s.id AS id, s.name AS name"
+        )
+        with self.neo4j_driver.session() as session:
+            result = session.run(query, sid=schedule_id)
+            return [record.data() for record in result]
+
+    def check_attendance(self, student_id, schedule_id):
+        """
+        Проверить факт посещения конкретного студента на конкретной лекции.
+        Делается через PostgreSQL.
+        Возвращает Boolean.
+        """
+        self.pg_cur.execute(
+            "SELECT attended FROM Attendance WHERE student_id = %s AND schedule_id = %s",
+            (student_id, schedule_id)
+        )
+        row = self.pg_cur.fetchone()
+        return bool(row[0]) if row else False
+
+    def generate_audience_report(self, year: int, semester: int):
+        """
+        Генерирует отчёт по аудитории: для всех лекций в семестре возвращает курс, лекцию,
+        технические требования и общее число студентов.
+        Использует только Neo4j.
+        """
+        start_date, end_date = self._calculate_semester_dates(year, semester)
+        cypher = (
+            "MATCH (sch:Schedule) "
+            "WHERE sch.date >= date($start) AND sch.date <= date($end) "
+            "MATCH (sch)-[:FOR_GROUP]->(g:Group)-[:HAS_STUDENT]->(s:Student) "
+            "WITH sch, COUNT(DISTINCT s) AS total_students "
+            "MATCH (l:Lecture)-[:SCHEDULED_AT]->(sch) "
+            "MATCH (c:Course)-[:HAS_LECTURE]->(l) "
+            "OPTIONAL MATCH (l)-[:HAS_MATERIAL]->(m:Material) "
+            "RETURN c.name AS course_name, l.name AS lecture_name, "
+            "COLLECT(DISTINCT m.name) AS tech_requirements, total_students "
+            "ORDER BY course_name, lecture_name"
+        )
+        with self.neo4j_driver.session() as session:
+            results = session.run(
+                cypher,
+                start=str(start_date), end=str(end_date)
+            )
+            return [record.data() for record in results]
+
+    def generate_group_report(self, group_id: int, start_date=None, end_date=None):
+        # 1. Получаем базовые данные из Neo4j
+        with self.neo4j_driver.session() as session:
+            rec = session.run(
+                "MATCH (g:Group {id:$gid}) RETURN g.id AS id, g.name AS name",
+                gid=group_id
+            ).single()
+            if not rec:
+                return []
+            group_info = dict(rec)
+
+            # Студенты группы
+            student_recs = session.run(
+                "MATCH (g:Group {id:$gid})-[:HAS_STUDENT]->(s:Student)"
+                " RETURN s.id AS student_id, s.name AS student_name",
+                gid=group_id
+            )
+            students = [r.data() for r in student_recs]
+            sched_recs = session.run(
+                "MATCH (g:Group {id:$gid})<-[:HAS_GROUP]-(s:Specialty)<-[:HAS_SPECIALTY]-(d:Department), "
+                "(g)<-[:FOR_GROUP]-(sch:Schedule)<-[:SCHEDULED_AT]-(l:Lecture)<-[:HAS_LECTURE]-(c:Course)<-[:OFFERS]-(d) "
+                "RETURN sch.id AS schedule_id, c.id AS course_id, c.name AS course_name",
+                gid=group_id
+            )
+            rows = [r.data() for r in sched_recs]
+        if not rows or not students:
+            return []
+        schedule_ids = [r['schedule_id'] for r in rows]
+        # Получаем семестры для каждого расписания
+        with self.pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, semester FROM Schedule WHERE id = ANY(%s)",
+                (schedule_ids,)
+            )
+            sid2sem = dict(cur.fetchall())
+        semesters = list(set(sid2sem.values()))
+        report_sql = """
+SELECT
+  s.id            AS student_id,
+  s.name          AS student_name,
+  col.id          AS course_id,
+  col.name        AS course_name,
+  COUNT(DISTINCT sch.id) * 2          AS planned_hours,
+  COALESCE(SUM((att.attended)::int) * 2, 0) AS attended_hours
+FROM Students s
+  -- расписания для группы студента
+  JOIN Schedule sch
+    ON sch.group_id = s.group_id
+  -- лекции в этих расписаниях
+  JOIN Lecture lec
+    ON lec.id = sch.lecture_id
+  -- курс-лекций (Course_of_lecture) даёт нам id и name курса
+  JOIN Course_of_lecture col
+    ON col.id = lec.course_of_lecture_id
+  -- реальное посещение, при этом мы сразу фильтруем по partition key semester
+  LEFT JOIN Attendance att
+    ON att.student_id  = s.id
+   AND att.schedule_id = sch.id
+   AND att.semester    = ANY(%s)   -- список семестров для pruning
+WHERE
+      s.group_id = %s              -- конкретная группа
+  AND sch.id     = ANY(%s)        -- только интересующие расписания
+  AND ( %s::date IS NULL OR sch.date >= %s::date )  -- параметр start_date
+  AND ( %s::date IS NULL OR sch.date <= %s::date )  -- параметр end_date
+GROUP BY
+  s.id,
+  s.name,
+  col.id,
+  col.name
+ORDER BY
+  s.name,
+  col.name;
+        """
+        course_vals = [(r['course_id'], r['course_name']) for r in rows]
+        # Параметры запроса
+        params = [tuple(course_vals), semesters, group_id, schedule_ids,
+                  start_date, start_date, end_date, end_date]
+        params = [semesters, group_id, schedule_ids, start_date, start_date, end_date, end_date]
+        with self.pg_conn.cursor() as cur:
+            # psycopg2.sql для вставки VALUES списка
+            from psycopg2 import sql
+            values_sql = sql.SQL(',').join(
+                sql.SQL("(%s, %s)") for _ in course_vals
+            )
+            final_sql = sql.SQL(report_sql).format(values_sql)
+            cur.execute(final_sql, params)
+            result_rows = cur.fetchall()
+
+        # 4. Формируем финальный отчёт
+        report = []
+        for student_id, student_name, course_id, course_name, planned, attended in result_rows:
+            report.append({
+                'group_info': group_info,
+                'student_info': {'id': student_id, 'name': student_name},
+                'course_info': {'id': course_id, 'name': course_name},
+                'planned_hours': planned,
+                'attended_hours': attended
+            })
+        return report
 
 if __name__ == '__main__':
-    service = SyncService(PG_CONFIG, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
-    try:
-        service.run_all()
-    finally:
-        service.close()
+    service = SyncService()
+    data = {'group_id': 1}
+    group_id = data.get('group_id')
+    report = service.generate_group_report(group_id=group_id)
+    print(report)
