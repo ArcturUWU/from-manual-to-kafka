@@ -116,5 +116,7 @@ Output includes:
 1. Group, student, and course details
 2. Planned vs. attended hours
 
+Attendance note: database partition is allowing to get some attendance data faster, partition key is semester, it's been created by trigger by calculating semester number(year + "summer" ! "winter") and it's now used in 1st and 3rd labs
+
 # License Information
 This project is licensed under the MIT License 📜. You are free to use, modify, and distribute the project as you see fit, but please provide attribution and mention the original authors 🎉
