@@ -242,103 +242,105 @@ class SyncService:
             return [record.data() for record in results]
 
     def generate_group_report(self, group_id: int, start_date=None, end_date=None):
-        # 1. Получаем базовые данные из Neo4j
+        # 1. Извлекаем из Neo4j информацию по группе и её кафедре
         with self.neo4j_driver.session() as session:
+            # Сама группа
             rec = session.run(
-                "MATCH (g:Group {id:$gid}) RETURN g.id AS id, g.name AS name",
+                "MATCH (g:Group {id:$gid}) "
+                "WITH g "
+                # Находим её специальность и кафедру
+                "MATCH (g)<-[:HAS_GROUP]-(spec:Specialty)<-[:HAS_SPECIALTY]-(dept:Department) "
+                "RETURN g.id AS id, g.name AS name, dept.id AS dept_id, dept.name AS dept_name",
                 gid=group_id
             ).single()
             if not rec:
                 return []
-            group_info = dict(rec)
+            group_info = {
+                'id': rec['id'],
+                'name': rec['name'],
+                'department': {'id': rec['dept_id'], 'name': rec['dept_name']}
+            }
 
             # Студенты группы
-            student_recs = session.run(
-                "MATCH (g:Group {id:$gid})-[:HAS_STUDENT]->(s:Student)"
-                " RETURN s.id AS student_id, s.name AS student_name",
-                gid=group_id
-            )
-            students = [r.data() for r in student_recs]
-            sched_recs = session.run(
-                "MATCH (g:Group {id:$gid})<-[:HAS_GROUP]-(s:Specialty)<-[:HAS_SPECIALTY]-(d:Department), "
-                "(g)<-[:FOR_GROUP]-(sch:Schedule)<-[:SCHEDULED_AT]-(l:Lecture)<-[:HAS_LECTURE]-(c:Course)<-[:OFFERS]-(d) "
-                "RETURN sch.id AS schedule_id, c.id AS course_id, c.name AS course_name",
-                gid=group_id
-            )
-            rows = [r.data() for r in sched_recs]
-        if not rows or not students:
-            return []
-        schedule_ids = [r['schedule_id'] for r in rows]
-        # Получаем семестры для каждого расписания
-        with self.pg_conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, semester FROM Schedule WHERE id = ANY(%s)",
-                (schedule_ids,)
-            )
-            sid2sem = dict(cur.fetchall())
-        semesters = list(set(sid2sem.values()))
-        report_sql = """
-SELECT
-  s.id            AS student_id,
-  s.name          AS student_name,
-  col.id          AS course_id,
-  col.name        AS course_name,
-  COUNT(DISTINCT sch.id) * 2          AS planned_hours,
-  COALESCE(SUM((att.attended)::int) * 2, 0) AS attended_hours
-FROM Students s
-  -- расписания для группы студента
-  JOIN Schedule sch
-    ON sch.group_id = s.group_id
-  -- лекции в этих расписаниях
-  JOIN Lecture lec
-    ON lec.id = sch.lecture_id
-  -- курс-лекций (Course_of_lecture) даёт нам id и name курса
-  JOIN Course_of_lecture col
-    ON col.id = lec.course_of_lecture_id
-  -- реальное посещение, при этом мы сразу фильтруем по partition key semester
-  LEFT JOIN Attendance att
-    ON att.student_id  = s.id
-   AND att.schedule_id = sch.id
-   AND att.semester    = ANY(%s)   -- список семестров для pruning
-WHERE
-      s.group_id = %s              -- конкретная группа
-  AND sch.id     = ANY(%s)        -- только интересующие расписания
-  AND ( %s::date IS NULL OR sch.date >= %s::date )  -- параметр start_date
-  AND ( %s::date IS NULL OR sch.date <= %s::date )  -- параметр end_date
-GROUP BY
-  s.id,
-  s.name,
-  col.id,
-  col.name
-ORDER BY
-  s.name,
-  col.name;
-        """
-        course_vals = [(r['course_id'], r['course_name']) for r in rows]
-        # Параметры запроса
-        params = [tuple(course_vals), semesters, group_id, schedule_ids,
-                  start_date, start_date, end_date, end_date]
-        params = [semesters, group_id, schedule_ids, start_date, start_date, end_date, end_date]
-        with self.pg_conn.cursor() as cur:
-            # psycopg2.sql для вставки VALUES списка
-            from psycopg2 import sql
-            values_sql = sql.SQL(',').join(
-                sql.SQL("(%s, %s)") for _ in course_vals
-            )
-            final_sql = sql.SQL(report_sql).format(values_sql)
-            cur.execute(final_sql, params)
-            result_rows = cur.fetchall()
+            students = [
+                r.data() for r in session.run(
+                    "MATCH (g:Group {id:$gid})-[:HAS_STUDENT]->(s:Student) "
+                    "RETURN s.id AS student_id, s.name AS student_name",
+                    gid=group_id
+                )
+            ]
 
-        # 4. Формируем финальный отчёт
+            # Расписания: только те лекции/курсы, которые предложены этой кафедрой
+            schedules = [
+                r.data() for r in session.run(
+                    """
+                    MATCH (g:Group {id:$gid})
+                    <-[:HAS_GROUP]-(spec:Specialty)
+                    <-[:HAS_SPECIALTY]-(dept:Department {id:$did})
+                    # Курсы, которые предлагает эта кафедра
+                    <-[:OFFERS]-(c:Course)
+                    -[:HAS_LECTURE]->(l:Lecture)
+                    -[:SCHEDULED_AT]->(sch:Schedule)
+                    WHERE ($start IS NULL OR sch.date >= datetime($start))
+                    AND ($end   IS NULL OR sch.date <= datetime($end))
+                    RETURN sch.id        AS schedule_id,
+                        c.id          AS course_id,
+                        c.name        AS course_name,
+                        sch.date      AS date
+                    """,
+                    gid=group_id,
+                    did=group_info['department']['id'],
+                    start=start_date.isoformat() if start_date else None,
+                    end=end_date.isoformat()   if end_date   else None
+                )
+            ]
+
+        if not students or not schedules:
+            return []
+
+        # 2. Готовим списки для Postgres
+        student_ids  = [s['student_id']  for s in students]
+        schedule_ids = [s['schedule_id'] for s in schedules]
+
+        # 3. Получаем фактические часы посещения из Postgres (с учётом партиций)
+        sql_att = """
+        SELECT
+        student_id,
+        schedule_id,
+        SUM((attended::int) * 2) AS attended_hours
+        FROM Attendance
+        WHERE student_id = ANY(%s)
+        AND schedule_id = ANY(%s)
+        GROUP BY student_id, schedule_id
+        """
+        self.pg_cur.execute(sql_att, (student_ids, schedule_ids))
+        att_map = {
+            (stu, sch): hrs
+            for stu, sch, hrs in self.pg_cur.fetchall()
+        }
+
+        # 4. Считаем запланированные и фактические часы, формируем отчёт
+        from collections import defaultdict
+        # Для каждого курса: список всех schedule_id, каждый по 2 часа
+        planned = defaultdict(list)
+        for sch in schedules:
+            planned[(sch['course_id'], sch['course_name'])].append(sch['schedule_id'])
+
         report = []
-        for student_id, student_name, course_id, course_name, planned, attended in result_rows:
-            report.append({
-                'group_info': group_info,
-                'student_info': {'id': student_id, 'name': student_name},
-                'course_info': {'id': course_id, 'name': course_name},
-                'planned_hours': planned,
-                'attended_hours': attended
-            })
+        for student in students:
+            sid   = student['student_id']
+            sname = student['student_name']
+            for (course_id, course_name), sch_ids in planned.items():
+                total_planned  = 2 * len(sch_ids)
+                total_attended = sum(att_map.get((sid, sch), 0) for sch in sch_ids)
+                report.append({
+                    'group_info':     group_info,
+                    'student_info':   {'id': sid, 'name': sname},
+                    'course_info':    {'id': course_id, 'name': course_name},
+                    'planned_hours':  total_planned,
+                    'attended_hours': total_attended
+                })
+
         return report
 
 if __name__ == '__main__':
