@@ -1,13 +1,17 @@
 {
-  "name": "redis-sink-connector",
+  "name": "redis-sink",
   "config": {
-    "connector.class": "com.github.jcustenborder.kafka.connect.redis.RedisSinkConnector",
+    "connector.class": "io.lenses.streamreactor.connect.redis.sink.RedisSinkConnector",
+    "tasks.max": "1",
     "topics": "postgres_server.public.students",
-    "redis.hosts": "redis:6379",
-    "redis.command": "SET",
-    "redis.key.expression": "student:${key}",
-    "behavior.on.null.values": "delete",
     "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-    "value.converter": "org.apache.kafka.connect.storage.StringConverter"
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "transforms": "extractAfter",
+    "transforms.extractAfter.type": "org.apache.kafka.connect.transforms.ExtractField$Value",
+    "transforms.extractAfter.field": "after",
+    "connect.redis.host": "redis",
+    "connect.redis.port": "6379",
+    "connect.redis.kcql": "INSERT INTO student:${id} SELECT id, name, age, mail, group_id FROM postgres_server.public.students PK id"
   }
 }
