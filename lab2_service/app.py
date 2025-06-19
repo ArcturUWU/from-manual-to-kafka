@@ -30,7 +30,7 @@ def get_audience_report():
     if year is None or semester is None:
         return jsonify({'error': 'Required fields: year, semester'}), 400
     try:
-        service = neo4j_sync.SyncService(PG_CONFIG, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+        service = neo4j_sync.SyncService()
         report = service.generate_audience_report(year=year, semester=semester)
         return jsonify(report=report, meta={'status': 'success', 'count': len(report)}), 200
     except Exception as e:
