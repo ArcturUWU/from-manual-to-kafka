@@ -1,6 +1,7 @@
 from neo4j import GraphDatabase
 from datetime import date, timedelta
 import psycopg2
+from redis_module import StudentSearch
 
 # PostgreSQL connection parameters
 PG_CONFIG = {
@@ -248,7 +249,6 @@ class SyncService:
             rec = session.run(
                 "MATCH (g:Group {id:$gid}) "
                 "WITH g "
-                # Находим её специальность и кафедру
                 "MATCH (g)<-[:HAS_GROUP]-(spec:Specialty)<-[:HAS_SPECIALTY]-(dept:Department) "
                 "RETURN g.id AS id, g.name AS name, dept.id AS dept_id, dept.name AS dept_name",
                 gid=group_id
@@ -277,12 +277,9 @@ class SyncService:
                     MATCH (g:Group {id:$gid})
                     <-[:HAS_GROUP]-(spec:Specialty)
                     <-[:HAS_SPECIALTY]-(dept:Department {id:$did})
-                    # Курсы, которые предлагает эта кафедра
-                    <-[:OFFERS]-(c:Course)
+                    -[:OFFERS]-(c:Course)
                     -[:HAS_LECTURE]->(l:Lecture)
                     -[:SCHEDULED_AT]->(sch:Schedule)
-                    WHERE ($start IS NULL OR sch.date >= datetime($start))
-                    AND ($end   IS NULL OR sch.date <= datetime($end))
                     RETURN sch.id        AS schedule_id,
                         c.id          AS course_id,
                         c.name        AS course_name,
@@ -319,27 +316,26 @@ class SyncService:
             for stu, sch, hrs in self.pg_cur.fetchall()
         }
 
-        # 4. Считаем запланированные и фактические часы, формируем отчёт
-        from collections import defaultdict
-        # Для каждого курса: список всех schedule_id, каждый по 2 часа
-        planned = defaultdict(list)
-        for sch in schedules:
-            planned[(sch['course_id'], sch['course_name'])].append(sch['schedule_id'])
+        total_planned_all = 2 * len(schedule_ids)
 
         report = []
         for student in students:
-            sid   = student['student_id']
+            sid = student['student_id']
             sname = student['student_name']
-            for (course_id, course_name), sch_ids in planned.items():
-                total_planned  = 2 * len(sch_ids)
-                total_attended = sum(att_map.get((sid, sch), 0) for sch in sch_ids)
-                report.append({
-                    'group_info':     group_info,
-                    'student_info':   {'id': sid, 'name': sname},
-                    'course_info':    {'id': course_id, 'name': course_name},
-                    'planned_hours':  total_planned,
-                    'attended_hours': total_attended
-                })
+            # Сколько часов реально отслушал студент по всем расписаниям:
+            attended_total = sum(
+                att_map.get((sid, sch), 0)
+                for sch in schedule_ids
+            )
+            remaining = total_planned_all - attended_total
+
+            report.append({
+                'group_info':      group_info,
+                'student_info':    {'id': sid, 'name': sname},
+                'planned_hours':   total_planned_all,
+                'attended_hours':  attended_total,
+                'remaining_hours': remaining
+            })
 
         return report
 
