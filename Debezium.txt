@@ -3,7 +3,6 @@ curl -X POST -H "Content-Type: application/json" http://localhost:8083/connector
 curl -X POST -H "Content-Type: application/json" http://localhost:8083/connectors -d @elastic_sink.json
 curl -X POST -H "Content-Type: application/json" http://localhost:8083/connectors -d @redis_sink.json
 curl -X POST -H "Content-Type: application/json" http://localhost:8083/connectors -d @neo4j_sink.json
-curl -X POST -H "Content-Type: application/json" http://localhost:8083/connectors -d @mongo_sink.json
 
 ##### fast check of messages and topics for all tables
 docker exec broker kafka-topics.sh --bootstrap-server broker:29092 --list
